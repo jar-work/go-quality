@@ -1,0 +1,21 @@
+# goquality checking itself.
+crap:
+  max: 30
+
+arch:
+  rules:
+    - package: '^{module}/internal/'
+      deny: '^{module}/cmd/'
+      reason: the engine does not depend on the CLI
+    - package: '^{module}/internal/(config|execx|tools)$'
+      deny: '^{module}/internal/(crap|mutation|arch|security)$'
+      reason: shared building blocks do not depend on the checks
+
+# Every package kills all of its covered mutants; mutant coverage is set at today's level.
+mutation:
+  packages:
+    - {path: ./internal/crap, efficacy: 100, mutant-coverage: 85}
+    - {path: ./internal/mutation, efficacy: 100, mutant-coverage: 75}
+    - {path: ./internal/security, efficacy: 100, mutant-coverage: 70}
+    - {path: ./internal/arch, efficacy: 100, mutant-coverage: 70}
+    - {path: ./internal/config, efficacy: 100, mutant-coverage: 100}

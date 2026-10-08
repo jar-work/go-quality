@@ -1,0 +1,14 @@
+# Pre-existing gosec findings: <rule> <file>, one line per finding. This file only shrinks.
+# goquality reads and runs things inside the developer's own module, which is trusted input:
+# G304: reads the files the config points to (baselines, .quality.yaml, go.mod) and the module's .go files.
+G304 internal/security/security.go
+G304 internal/crap/baseline.go
+G304 internal/config/config.go
+G304 internal/config/config.go
+G304 internal/arch/arch.go
+G304 internal/arch/arch.go
+# G204: running go test, go list and the pinned tools is the whole point of execx.
+G204 internal/execx/execx.go
+# G122: reads .go files while walking the module to find inline SQL; a symlink race there needs
+# write access to the repository, which already allows changing the code itself.
+G122 internal/arch/arch.go
