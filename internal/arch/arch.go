@@ -14,8 +14,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/HRECL/go-quality/internal/config"
-	"github.com/HRECL/go-quality/internal/execx"
+	"github.com/jar-work/go-quality/internal/config"
+	"github.com/jar-work/go-quality/internal/execx"
 )
 
 type Violation struct {

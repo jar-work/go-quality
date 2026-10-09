@@ -4,14 +4,15 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/HRECL/go-quality/internal/config"
-	"github.com/HRECL/go-quality/internal/crap"
-	"github.com/HRECL/go-quality/internal/mutation"
-	"github.com/HRECL/go-quality/internal/security"
+	"github.com/jar-work/go-quality/internal/config"
+	"github.com/jar-work/go-quality/internal/crap"
+	"github.com/jar-work/go-quality/internal/findings"
+	"github.com/jar-work/go-quality/internal/mutation"
 )
 
 // newModule writes a small module: a tested function, an untested complex one, and a package
@@ -38,7 +39,7 @@ func newModule(t *testing.T, config string) string {
 	return dir
 }
 
-const offlineConfig = "security:\n  govulncheck: {disabled: true}\n  gosec: {disabled: true}\n  gitleaks: {disabled: true}\n"
+const offlineConfig = "security:\n  govulncheck: {disabled: true}\n  gosec: {disabled: true}\n  gitleaks: {disabled: true}\n  hadolint: {disabled: true}\n  trivy: {disabled: true}\n"
 
 const complexFunc = `package sample
 
@@ -180,15 +181,18 @@ func TestRunArguments(t *testing.T) {
 
 func TestReports(t *testing.T) {
 	var out bytes.Buffer
-	findings := []security.Finding{{Rule: "G401", File: "a.go", Text: "a.go:5: weak crypto (Rule:G401"}}
-	if reportGosec(&out, findings, map[string]int{"G104 main.go": 1}, "quality/gosec.txt") {
+	found := []findings.Finding{{Rule: "G401", File: "a.go", Text: "a.go:5: weak crypto (Rule:G401"}}
+	if reportFindings(&out, "gosec", found, map[string]int{"G104 main.go": 1}, "quality/gosec.txt") {
 		t.Error("gosec passed with a new finding")
 	}
-	if !strings.Contains(out.String(), "FIXED  G104 main.go: remove it from quality/gosec.txt") {
-		t.Errorf("gosec output:\n%s", out.String())
+	for _, want := range []string{"NEW   a.go:5: weak crypto", "FIXED  G104 main.go: remove it from quality/gosec.txt", "gosec: new findings"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
 	}
-	if !reportGosec(&out, nil, nil, "") {
-		t.Error("gosec failed with no findings")
+	out.Reset()
+	if !reportFindings(&out, "dockerfiles", nil, nil, "") || out.String() != "dockerfiles: ok\n" {
+		t.Errorf("no findings: %q", out.String())
 	}
 
 	out.Reset()
@@ -211,5 +215,52 @@ func TestMutationWithoutPackagesIsSkipped(t *testing.T) {
 	dir := newModule(t, offlineConfig)
 	if out, err := runIn(t, dir, "mutation"); err != nil || !strings.Contains(out, "skipped") {
 		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+func TestSecurityChecksContainers(t *testing.T) {
+	for _, bin := range []string{"hadolint", "trivy"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s is not installed", bin)
+		}
+	}
+	cfg := strings.Replace(offlineConfig, "  hadolint: {disabled: true}\n  trivy: {disabled: true}\n", "  trivy: {severities: [HIGH, CRITICAL]}\n", 1)
+	dir := newModule(t, cfg)
+	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM alpine\nCOPY . /app\n"), 0o600)
+
+	out, err := runIn(t, dir, "security")
+	if !errors.Is(err, errFailed) {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	for _, want := range []string{"NEW   Dockerfile:1: DL3006 (warning)", "NEW   Dockerfile:0: DS-0002 (HIGH)", "hadolint: new findings", "trivy: new findings"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+
+	if !strings.Contains(out, "NEW   Dockerfile:2: GQ001 COPY copies the whole build context") {
+		t.Errorf("dockerignore finding missing:\n%s", out)
+	}
+
+	os.MkdirAll(filepath.Join(dir, "quality"), 0o750)
+	os.WriteFile(filepath.Join(dir, ".dockerignore"), []byte(".env\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "quality", "hadolint-baseline.txt"), []byte("DL3006 Dockerfile\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "quality", "trivy-baseline.txt"), []byte("# a debug image\nDS-0002 Dockerfile\n"), 0o600)
+	if out, err := runIn(t, dir, "security"); err != nil || !strings.Contains(out, "hadolint: ok") || !strings.Contains(out, "trivy: ok") || !strings.Contains(out, "dockerignore: ok") {
+		t.Errorf("baselined findings still fail: %v\n%s", err, out)
+	}
+}
+
+// The dockerignore rule needs no external tool, so it also runs in the offline configuration.
+func TestDockerignoreRunsOffline(t *testing.T) {
+	dir := newModule(t, offlineConfig)
+	os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM alpine:3.24\nCOPY . /app\nUSER app\n"), 0o600)
+	out, err := runIn(t, dir, "security")
+	if !errors.Is(err, errFailed) || !strings.Contains(out, "dockerignore: new findings") {
+		t.Errorf("err = %v\n%s", err, out)
+	}
+	os.WriteFile(filepath.Join(dir, ".quality.yaml"), []byte(offlineConfig+"  dockerignore: {disabled: true}\n"), 0o600)
+	if out, err := runIn(t, dir, "security"); err != nil || strings.Contains(out, "dockerignore") {
+		t.Errorf("disabled: %v\n%s", err, out)
 	}
 }

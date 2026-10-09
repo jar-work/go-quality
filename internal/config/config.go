@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -67,6 +68,34 @@ type Security struct {
 	Govulncheck Check     `yaml:"govulncheck"`
 	Gosec       Baselined `yaml:"gosec"`
 	Gitleaks    Baselined `yaml:"gitleaks"`
+	Hadolint    Hadolint  `yaml:"hadolint"`
+	Trivy       Trivy     `yaml:"trivy"`
+	// Dockerignore reports Dockerfiles that copy the whole build context with no .dockerignore.
+	Dockerignore Baselined `yaml:"dockerignore"`
+}
+
+// Hadolint lints the module's Dockerfiles.
+type Hadolint struct {
+	Disabled bool   `yaml:"disabled"`
+	Baseline string `yaml:"baseline"`
+	// Level is the least severe hadolint level reported: error, warning, info or style.
+	Level string `yaml:"level"`
+}
+
+// Trivy checks the module (Dockerfiles, Kubernetes manifests) and any extra targets, such as
+// Helm charts that live outside the module, for misconfigurations.
+type Trivy struct {
+	Disabled   bool          `yaml:"disabled"`
+	Baseline   string        `yaml:"baseline"`
+	Severities []string      `yaml:"severities"`
+	Targets    []TrivyTarget `yaml:"targets"`
+}
+
+// TrivyTarget is a path relative to the module. Helm charts whose values live elsewhere need
+// helm-values to be rendered; without them trivy skips the templates it cannot render.
+type TrivyTarget struct {
+	Path       string   `yaml:"path"`
+	HelmValues []string `yaml:"helm-values"`
 }
 
 type Check struct {
@@ -87,8 +116,15 @@ func Default() Config {
 		Crap:     Crap{Max: 30, Baseline: "quality/crap-baseline.txt"},
 		Mutation: Mutation{Workers: 2, TimeoutCoefficient: 10},
 		Security: Security{
-			Gosec:    Baselined{Baseline: "quality/gosec-baseline.txt"},
-			Gitleaks: Baselined{Baseline: "quality/gitleaks-baseline.txt"},
+			Gosec:        Baselined{Baseline: "quality/gosec-baseline.txt"},
+			Gitleaks:     Baselined{Baseline: "quality/gitleaks-baseline.txt"},
+			Hadolint:     Hadolint{Baseline: "quality/hadolint-baseline.txt", Level: "warning"},
+			Dockerignore: Baselined{Baseline: "quality/dockerignore-baseline.txt"},
+			Trivy: Trivy{
+				Baseline:   "quality/trivy-baseline.txt",
+				Severities: []string{"MEDIUM", "HIGH", "CRITICAL"},
+				Targets:    []TrivyTarget{{Path: "."}},
+			},
 		},
 		Specs: Specs{Dir: "specs"},
 	}
@@ -123,6 +159,19 @@ func (c Config) validate() error {
 		}
 		if p.Efficacy < 0 || p.Efficacy > 100 || p.MutantCoverage < 0 || p.MutantCoverage > 100 {
 			return fmt.Errorf("%s: thresholds for %s must be between 0 and 100", FileName, p.Path)
+		}
+	}
+	if !slices.Contains([]string{"error", "warning", "info", "style"}, c.Security.Hadolint.Level) {
+		return fmt.Errorf("%s: security.hadolint.level must be error, warning, info or style", FileName)
+	}
+	for _, sev := range c.Security.Trivy.Severities {
+		if !slices.Contains([]string{"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"}, sev) {
+			return fmt.Errorf("%s: unknown trivy severity %q", FileName, sev)
+		}
+	}
+	for _, t := range c.Security.Trivy.Targets {
+		if t.Path == "" {
+			return fmt.Errorf("%s: every trivy target needs a path", FileName)
 		}
 	}
 	for _, r := range c.Arch.Rules {

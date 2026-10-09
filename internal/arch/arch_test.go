@@ -6,16 +6,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/HRECL/go-quality/internal/config"
+	"github.com/jar-work/go-quality/internal/config"
 )
 
 func TestCheckDeps(t *testing.T) {
 	pkgs := map[string][]string{
-		"api":                 {"api/handlers/groups", "api/utils", "fmt"},
-		"api/utils":           {"api/models", "api/handlers/groups"}, // violation
-		"api/handlers/groups": {"api/utils", "api/handlers/joker"},   // violation
-		"api/handlers/joker":  {"api/utils"},
-		"api/models":          {"time"},
+		"api":                   {"api/handlers/orders", "api/utils", "fmt"},
+		"api/utils":             {"api/models", "api/handlers/orders"},  // violation
+		"api/handlers/orders":   {"api/utils", "api/handlers/payments"}, // violation
+		"api/handlers/payments": {"api/utils"},
+		"api/models":            {"time"},
 	}
 	rules := []config.ArchRule{
 		{Package: `^{module}/utils$`, Deny: `^{module}/handlers`, Reason: "utils is a base layer"},
@@ -26,8 +26,8 @@ func TestCheckDeps(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"api/handlers/groups imports api/handlers/joker (handlers do not import each other)",
-		"api/utils imports api/handlers/groups (utils is a base layer)",
+		"api/handlers/orders imports api/handlers/payments (handlers do not import each other)",
+		"api/utils imports api/handlers/orders (utils is a base layer)",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)

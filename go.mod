@@ -1,4 +1,4 @@
-module github.com/HRECL/go-quality
+module github.com/jar-work/go-quality
 
 go 1.26.0
 

@@ -12,7 +12,9 @@ func TestLoadDefaultsWithoutFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Crap.Max != 30 || cfg.Mutation.Workers != 2 || cfg.Security.Gosec.Baseline != "quality/gosec-baseline.txt" {
+	if cfg.Crap.Max != 30 || cfg.Mutation.Workers != 2 || cfg.Security.Gosec.Baseline != "quality/gosec-baseline.txt" ||
+		cfg.Security.Hadolint.Level != "warning" || len(cfg.Security.Trivy.Targets) != 1 || cfg.Security.Trivy.Targets[0].Path != "." ||
+		strings.Join(cfg.Security.Trivy.Severities, ",") != "MEDIUM,HIGH,CRITICAL" {
 		t.Errorf("defaults = %+v", cfg)
 	}
 }
@@ -34,11 +36,14 @@ func TestLoadKeepsDefaultsForMissingKeys(t *testing.T) {
 
 func TestLoadRejectsMistakes(t *testing.T) {
 	for name, content := range map[string]string{
-		"typo in a key":        "crap:\n  maxx: 20\n",
-		"threshold above 100":  "mutation:\n  packages:\n    - path: ./p\n      efficacy: 150\n",
-		"package without path": "mutation:\n  packages:\n    - efficacy: 90\n",
-		"zero workers":         "mutation:\n  workers: 0\n",
-		"rule without deny":    "arch:\n  rules:\n    - package: x\n",
+		"typo in a key":             "crap:\n  maxx: 20\n",
+		"threshold above 100":       "mutation:\n  packages:\n    - path: ./p\n      efficacy: 150\n",
+		"package without path":      "mutation:\n  packages:\n    - efficacy: 90\n",
+		"zero workers":              "mutation:\n  workers: 0\n",
+		"rule without deny":         "arch:\n  rules:\n    - package: x\n",
+		"unknown hadolint level":    "security:\n  hadolint: {level: notice}\n",
+		"unknown trivy severity":    "security:\n  trivy: {severities: [SEVERE]}\n",
+		"trivy target without path": "security:\n  trivy:\n    targets: [{helm-values: [v.yaml]}]\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()

@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/HRECL/go-quality/internal/arch"
-	"github.com/HRECL/go-quality/internal/crap"
-	"github.com/HRECL/go-quality/internal/execx"
-	"github.com/HRECL/go-quality/internal/mutation"
-	"github.com/HRECL/go-quality/internal/security"
+	"github.com/jar-work/go-quality/internal/arch"
+	"github.com/jar-work/go-quality/internal/container"
+	"github.com/jar-work/go-quality/internal/crap"
+	"github.com/jar-work/go-quality/internal/execx"
+	"github.com/jar-work/go-quality/internal/findings"
+	"github.com/jar-work/go-quality/internal/mutation"
+	"github.com/jar-work/go-quality/internal/security"
+	"github.com/jar-work/go-quality/internal/tools"
 
 	"golang.org/x/tools/cover"
 )
@@ -53,7 +56,7 @@ func (g *gate) inlineSQL() (bool, error) {
 // that needs fixing.
 func (g *gate) security() error {
 	failed := false
-	for _, check := range []func() (bool, error){g.govulncheck, g.gosec, g.gitleaks} {
+	for _, check := range []func() (bool, error){g.govulncheck, g.gosec, g.gitleaks, g.hadolint, g.trivy, g.dockerignore} {
 		ok, err := check()
 		if err != nil {
 			return err
@@ -85,11 +88,82 @@ func (g *gate) gosec() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	baseline, err := security.ReadGosecBaseline(filepath.Join(g.dir, cfg.Baseline))
+	return g.compare("gosec", findings, cfg.Baseline)
+}
+
+func (g *gate) hadolint() (bool, error) {
+	cfg := g.cfg.Security.Hadolint
+	if cfg.Disabled {
+		return true, nil
+	}
+	fmt.Fprintln(g.out, "-- hadolint")
+	if err := g.requireBinary(tools.Hadolint); err != nil {
+		return false, err
+	}
+	files, err := container.Dockerfiles(g.dir)
 	if err != nil {
 		return false, err
 	}
-	return reportGosec(g.out, findings, baseline, cfg.Baseline), nil
+	found, err := container.Hadolint(g.dir, files, cfg.Level)
+	if err != nil {
+		return false, err
+	}
+	return g.compare("hadolint", found, cfg.Baseline)
+}
+
+func (g *gate) trivy() (bool, error) {
+	cfg := g.cfg.Security.Trivy
+	if cfg.Disabled {
+		return true, nil
+	}
+	fmt.Fprintln(g.out, "-- trivy")
+	if err := g.requireBinary(tools.Trivy); err != nil {
+		return false, err
+	}
+	var found []findings.Finding
+	for _, target := range cfg.Targets {
+		f, err := container.Trivy(g.dir, target.Path, target.HelmValues, cfg.Severities)
+		if err != nil {
+			return false, err
+		}
+		found = append(found, f...)
+	}
+	return g.compare("trivy", found, cfg.Baseline)
+}
+
+func (g *gate) dockerignore() (bool, error) {
+	cfg := g.cfg.Security.Dockerignore
+	if cfg.Disabled {
+		return true, nil
+	}
+	fmt.Fprintln(g.out, "-- dockerignore")
+	files, err := container.Dockerfiles(g.dir)
+	if err != nil {
+		return false, err
+	}
+	found, err := container.Dockerignore(g.dir, files)
+	if err != nil {
+		return false, err
+	}
+	return g.compare("dockerignore", found, cfg.Baseline)
+}
+
+// requireBinary fails when b is missing and prints a warning when its version is not the pinned one.
+func (g *gate) requireBinary(b tools.Binary) error {
+	warning, err := b.Check()
+	if warning != "" {
+		fmt.Fprintln(g.out, "warning:", warning)
+	}
+	return err
+}
+
+// compare reports findings against the baseline at path and returns whether the check passed.
+func (g *gate) compare(name string, found []findings.Finding, path string) (bool, error) {
+	baseline, err := findings.ReadBaseline(filepath.Join(g.dir, path))
+	if err != nil {
+		return false, err
+	}
+	return reportFindings(g.out, name, found, baseline, path), nil
 }
 
 func (g *gate) gitleaks() (bool, error) {

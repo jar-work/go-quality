@@ -4,16 +4,16 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/HRECL/go-quality/internal/config"
-	"github.com/HRECL/go-quality/internal/crap"
-	"github.com/HRECL/go-quality/internal/mutation"
-	"github.com/HRECL/go-quality/internal/security"
+	"github.com/jar-work/go-quality/internal/config"
+	"github.com/jar-work/go-quality/internal/crap"
+	"github.com/jar-work/go-quality/internal/findings"
+	"github.com/jar-work/go-quality/internal/mutation"
 )
 
-// reportGosec prints findings missing from the baseline and baseline entries no longer found.
+// reportFindings prints findings missing from the baseline and baseline entries no longer found.
 // It returns whether the check passed.
-func reportGosec(out io.Writer, findings []security.Finding, baseline map[string]int, baselinePath string) bool {
-	unexpected, fixed := security.CompareGosec(findings, baseline)
+func reportFindings(out io.Writer, name string, found []findings.Finding, baseline map[string]int, baselinePath string) bool {
+	unexpected, fixed := findings.Compare(found, baseline)
 	for _, f := range unexpected {
 		fmt.Fprintln(out, "NEW  ", f.Text)
 	}
@@ -21,10 +21,10 @@ func reportGosec(out io.Writer, findings []security.Finding, baseline map[string
 		fmt.Fprintf(out, "FIXED  %s: remove it from %s\n", key, baselinePath)
 	}
 	if len(unexpected) > 0 {
-		fmt.Fprintln(out, "gosec: new findings. Fix them; do not add them to the baseline.")
+		fmt.Fprintf(out, "%s: new findings. Fix them; do not add them to the baseline.\n", name)
 		return false
 	}
-	fmt.Fprintln(out, "gosec: ok")
+	fmt.Fprintf(out, "%s: ok\n", name)
 	return true
 }
 

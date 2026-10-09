@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strconv"
 
-	"github.com/HRECL/go-quality/internal/config"
-	"github.com/HRECL/go-quality/internal/execx"
-	"github.com/HRECL/go-quality/internal/tools"
+	"github.com/jar-work/go-quality/internal/config"
+	"github.com/jar-work/go-quality/internal/execx"
+	"github.com/jar-work/go-quality/internal/tools"
 )
 
 type Summary struct {

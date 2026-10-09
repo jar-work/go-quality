@@ -3,18 +3,16 @@
 package security
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
-	"github.com/HRECL/go-quality/internal/execx"
-	"github.com/HRECL/go-quality/internal/tools"
+	"github.com/jar-work/go-quality/internal/execx"
+	"github.com/jar-work/go-quality/internal/findings"
+	"github.com/jar-work/go-quality/internal/tools"
 )
 
 // Govulncheck fails when a vulnerability is reachable from the module's code. There is no
@@ -24,16 +22,8 @@ func Govulncheck(dir string, out io.Writer) (bool, error) {
 	return code == 0, err
 }
 
-type Finding struct {
-	Rule, File, Text string
-}
-
-// Key is how a finding is recorded in the baseline: rule and file, not line, so unrelated
-// edits that move code around do not invalidate it.
-func (f Finding) Key() string { return f.Rule + " " + f.File }
-
 // Gosec returns gosec's findings, with files relative to dir.
-func Gosec(dir string) ([]Finding, error) {
+func Gosec(dir string) ([]findings.Finding, error) {
 	out, _, err := execx.Run(dir, nil, nil, "go", "run", tools.Gosec, "-quiet", "-tests=false", "-fmt=golint", "./...")
 	if err != nil {
 		return nil, err
@@ -48,8 +38,8 @@ func Gosec(dir string) ([]Finding, error) {
 // golint format: "<path>:<line>:<col>: [CWE-x] <message> (Rule:G304, Severity:MEDIUM, Confidence:HIGH)"
 var gosecLineRe = regexp.MustCompile(`^(.+?):\d+:\d+: .*\(Rule:(G\d+),`)
 
-func ParseGosec(output, root string) []Finding {
-	var findings []Finding
+func ParseGosec(output, root string) []findings.Finding {
+	var found []findings.Finding
 	for _, line := range strings.Split(output, "\n") {
 		m := gosecLineRe.FindStringSubmatch(line)
 		if m == nil {
@@ -59,54 +49,9 @@ func ParseGosec(output, root string) []Finding {
 		if rel, err := filepath.Rel(root, file); err == nil && !strings.HasPrefix(rel, "..") {
 			file = filepath.ToSlash(rel)
 		}
-		findings = append(findings, Finding{Rule: m[2], File: file, Text: line})
+		found = append(found, findings.Finding{Rule: m[2], File: file, Text: line})
 	}
-	return findings
-}
-
-// CompareGosec matches findings against baseline counts per key. fixed lists keys with fewer
-// findings than recorded, which should be removed from the baseline.
-func CompareGosec(findings []Finding, baseline map[string]int) (unexpected []Finding, fixed []string) {
-	seen := map[string]int{}
-	for _, f := range findings {
-		seen[f.Key()]++
-		if seen[f.Key()] > baseline[f.Key()] {
-			unexpected = append(unexpected, f)
-		}
-	}
-	for key, n := range baseline {
-		if seen[key] < n {
-			fixed = append(fixed, key)
-		}
-	}
-	sort.Strings(fixed)
-	return unexpected, fixed
-}
-
-// ReadGosecBaseline reads "<rule> <file>" lines, one per accepted finding; '#' starts a comment.
-func ReadGosecBaseline(path string) (map[string]int, error) {
-	f, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return map[string]int{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	counts := map[string]int{}
-	scanner := bufio.NewScanner(f)
-	for line := 1; scanner.Scan(); line++ {
-		text := strings.TrimSpace(scanner.Text())
-		if text == "" || strings.HasPrefix(text, "#") {
-			continue
-		}
-		fields := strings.Fields(text)
-		if len(fields) != 2 {
-			return nil, fmt.Errorf("%s:%d: want \"<rule> <file>\"", path, line)
-		}
-		counts[fields[0]+" "+fields[1]]++
-	}
-	return counts, scanner.Err()
+	return found
 }
 
 // Gitleaks scans the whole git history of the repository that contains dir. Known findings are

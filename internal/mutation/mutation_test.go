@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/HRECL/go-quality/internal/config"
+	"github.com/jar-work/go-quality/internal/config"
 )
 
 const output = `Starting...
 Gathering coverage... done in 1.18s
-       LIVED CONDITIONALS_BOUNDARY at reconciliationHandler.go:139:41
+       LIVED CONDITIONALS_BOUNDARY at batch.go:139:41
 
 Mutation testing completed in 38 seconds 83 milliseconds
 Killed: 61, Lived: 8, Not covered: 19

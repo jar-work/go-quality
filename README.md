@@ -12,7 +12,7 @@ runs, in order:
 | Check | Question it answers | How |
 | --- | --- | --- |
 | `arch` | Does each package import only what its layer allows? Is SQL kept out of Go code? | rules in `.quality.yaml` over `go list` |
-| `security` | Vulnerable dependencies? Static-analysis findings? Committed secrets? | govulncheck, gosec, gitleaks |
+| `security` | Vulnerable dependencies? Static-analysis findings? Committed secrets? Unsafe Dockerfiles, Kubernetes manifests or Helm charts? | govulncheck, gosec, gitleaks, hadolint, trivy |
 | `test` | Do the tests pass? | `go test -coverprofile=coverage.out ./...` |
 | `crap` | Which functions are complex *and* untested? | CRAP = complexity² × (1 − coverage)³ + complexity |
 | `specs` | Does it do what the business asked? | `go test ./specs/...` once `.feature` files exist |
@@ -23,19 +23,27 @@ Each check also runs on its own: `goquality crap`, `goquality mutation`, ... Use
 
 ## Install
 
-Pin it as a tool of each module (Go 1.24+), so every machine and CI run the same version:
+goquality is a standalone binary. It is not added to your module's `go.mod`, so its own
+dependencies never touch your build. Run a pinned version:
 
 ```
-go get -tool github.com/HRECL/go-quality/cmd/goquality@v1.0.0
-go tool goquality check
+go run github.com/jar-work/go-quality/cmd/goquality@v1.0.0 check
 ```
 
-The repository is private: set `GOPRIVATE=github.com/HRECL/*` and make sure git can read it
-(in GitHub Actions, a token with read access to this repo).
+or install it once with `go install github.com/jar-work/go-quality/cmd/goquality@v1.0.0`. Pin the
+version in the Makefile or CI workflow that calls it.
 
-The external tools (gremlins, gosec, govulncheck, gitleaks) are pinned in
-`internal/tools/tools.go` and run with `go run pkg@version`. Upgrading one there upgrades it in
-every repository on its next goquality release.
+The Go tools it runs (gremlins, gosec, govulncheck, gitleaks) are pinned in
+`internal/tools/tools.go` and run with `go run pkg@version`: nothing to install. hadolint and
+trivy are not Go programs and must be on PATH:
+
+```
+brew install hadolint trivy
+```
+
+In GitHub Actions use `hadolint/hadolint-action` and `aquasecurity/setup-trivy`. goquality fails
+when one is missing and warns when its version differs from the pinned one. trivy downloads its
+checks bundle on first use and caches it.
 
 ## Configuration
 
@@ -51,7 +59,7 @@ mutation:
   workers: 2                                # default 2; gremlins' default (one per CPU) can freeze a laptop
   timeout-coefficient: 10                   # default 10
   packages:                                 # only packages with real tests
-    - path: ./handlers/joker
+    - path: ./internal/payments
       efficacy: 100                         # killed / (killed + lived), in %
       mutant-coverage: 75                   # mutants in tested code / all mutants, in %
 
@@ -68,6 +76,17 @@ security:
   govulncheck: {disabled: false}
   gosec: {baseline: quality/gosec-baseline.txt}
   gitleaks: {baseline: quality/gitleaks-baseline.txt}   # scans the whole repository's history
+  hadolint:
+    baseline: quality/hadolint-baseline.txt # default
+    level: warning                          # least severe level reported: error, warning, info, style
+  trivy:
+    baseline: quality/trivy-baseline.txt    # default
+    severities: [MEDIUM, HIGH, CRITICAL]    # default
+    targets:                                # paths relative to the module; default [.]
+      - path: .
+      - path: ../../charts/api              # a Helm chart outside the module...
+        helm-values: [../../charts/values/prod.yaml]   # ...rendered with these values
+  dockerignore: {baseline: quality/dockerignore-baseline.txt}   # rule GQ001
 
 specs:
   dir: specs                                # default
@@ -76,6 +95,30 @@ specs:
 In a repository with several modules, gitleaks scans the same history from each one. Enable it
 in one module (or point every module's `gitleaks.baseline` at one shared file) and disable it in
 the rest.
+
+## Containers: hadolint and trivy
+
+- **hadolint** lints every `Dockerfile`, `Dockerfile.*` and `*.Dockerfile` in the module: best
+  practices (pinned base images, `COPY` over `ADD`, no `sudo`...) and ShellCheck on every `RUN`.
+  Rules it should never report can go in a `.hadolint.yaml` with `ignored: [DL3018]`.
+- **trivy config** checks the module and any extra targets for misconfigurations: Dockerfiles
+  (an image running as root, secrets in `ENV`...), Kubernetes manifests and Helm charts
+  (privilege escalation, writable root filesystem, missing seccomp...). A chart whose values
+  live outside it must be given `helm-values`, or trivy silently skips the templates it cannot
+  render.
+
+They overlap on purpose: hadolint does not report an image that runs as root because it has no
+`USER` (only an explicit `USER root`), and trivy does.
+
+- **GQ001** (goquality's own rule, `security.dockerignore`): a `COPY .` or `ADD .` of the whole
+  build context with no `.dockerignore` next to the Dockerfile (or `<Dockerfile>.dockerignore`).
+  `.env` files and keys then end up in the image layers, even in a build stage the final image
+  does not copy from. Neither hadolint nor trivy checks this. It assumes the build context is the
+  Dockerfile's directory.
+
+Neither checks the built image. Scanning it for vulnerable OS packages needs the image and a
+vulnerability database, so it belongs in CI after `docker build` (`trivy image <ref>`), not in
+this gate.
 
 ## The ratchet: thresholds go up, baselines go down
 
@@ -86,6 +129,7 @@ Adopting the gate must not require fixing everything first, and improvements mus
 | CRAP | `quality/crap-baseline.txt`: functions above the maximum and their score | `crap --update-baseline` removes entries and lowers scores; it **refuses** to add a function or raise a score |
 | gosec | `quality/gosec-baseline.txt`: `<rule> <file>`, one line per accepted finding, with the reason in a comment | goquality reports entries that disappear (`FIXED`) so they can be removed |
 | gitleaks | `quality/gitleaks-baseline.txt`: fingerprints, never secret values | a baseline entry for a real secret is not a fix: rotate it |
+| hadolint, trivy, GQ001 | `quality/hadolint-baseline.txt`, `quality/trivy-baseline.txt`, `quality/dockerignore-baseline.txt`: `<rule> <file>`, with the reason in a comment | goquality reports entries that disappear (`FIXED`) |
 | inline SQL | `quality/inline-sql-baseline.txt`: files | goquality reports files that no longer contain SQL |
 | mutation | thresholds per package in `.quality.yaml` | goquality suggests raising a threshold once the score is 5 points above it |
 | govulncheck | nothing | a reachable vulnerability is fixed by upgrading the dependency |
@@ -120,8 +164,8 @@ Add this to the repository's `CLAUDE.md` (or equivalent):
 
 ```markdown
 ## Quality gate
-- Before finishing, run `go tool goquality check --skip mutation` in every module you changed. It must pass.
-- If CRAP reports IMPROVED, run `go tool goquality crap --update-baseline` and commit the baseline with your change.
+- Before finishing, run `go run github.com/jar-work/go-quality/cmd/goquality@v1.0.0 check --skip mutation` in every module you changed. It must pass.
+- If CRAP reports IMPROVED, run goquality's `crap --update-baseline` and commit the baseline with your change.
 - Never add entries or raise values in `quality/*-baseline.txt`, and never lower thresholds in `.quality.yaml`.
 - If mutation testing reports LIVED mutants in code you touched, write tests that kill them.
 - A gitleaks finding means a secret was committed: stop and tell the user. Do not baseline it.

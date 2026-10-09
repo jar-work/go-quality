@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/HRECL/go-quality/internal/config"
+	"github.com/jar-work/go-quality/internal/config"
 )
 
 const usage = `usage: goquality <command> [flags]
